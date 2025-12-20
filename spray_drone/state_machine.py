@@ -63,6 +63,12 @@ class StateMachine:
     # SET NEW STATE (SAFE)
     # --------------------------------------------------
     def set_state(self, next_state):
+        # 🔒 EMERGENCY OVERRIDE
+        # RTL must be allowed from ANY state
+        if next_state == DroneState.RTL:
+            self.state = next_state
+            return True
+        
         if self.can_transition(next_state):
             self.state = next_state
             return True
