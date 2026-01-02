@@ -8,4 +8,3 @@ SPRAY_ACTIVE_HIGH = True
 
 # Default spray duration (seconds)
 SPRAY_DURATION_SEC = 2.0
-
