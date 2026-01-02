@@ -63,4 +63,3 @@ class PacketHandler:
 
         return clean_packet
 
-
