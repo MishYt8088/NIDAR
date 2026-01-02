@@ -62,4 +62,3 @@ class SprayController:
         self.spray_off()
         GPIO.cleanup()
         print("🧹 Spray system cleaned up safely")
-
