@@ -3,249 +3,221 @@ import time
 from dronekit import VehicleMode
 
 from spray_logger import log_spray
-
-
-# Core state machine
 from state_machine import StateMachine, DroneState
-
-# Flight + action modules
-from navigation import arm_and_takeoff, goto_location, distance_to_target
 from spray_controller import SprayController
 from safety_checks import SafetyChecks
-
-# Data ingestion
 from packet_handler import PacketHandler
 from comms.csv_receiver import CSVReceiver
 
-# Configuration
+# NEW IMPORTS from updated navigation.py
+from navigation import (
+    smart_takeoff,
+    navigate_to_target_blocking,
+    change_altitude,
+    send_body_velocity
+)
+
 from config import (
     CSV_INPUT_PATH,
     USE_VISION_ALIGN,
     SPRAY_DURATION_SEC,
-    NAVIGATION_REACHED_DIST_M,
     GPS_GRACE_SEC,
-    NO_TARGET_HOVER_SEC
+    NO_TARGET_HOVER_SEC,
+    VISION_TIMEOUT_SEC # Ensure this is imported for the timeout check
 )
+
+# --- FLIGHT SETTINGS ---
+SAFE_TRAVEL_ALT = 3.0   # Meters (Travel height)
+SPRAY_WORK_ALT = 2.0    # Meters (Spraying height)
 
 
 class MissionManager:
-    """
-    MissionManager is the BRAIN of the spray drone.
-    It:
-    - Runs the state machine
-    - Ingests targets (CSV now, wireless later)
-    - Enforces safety
-    - Calls navigation, spray, and vision modules
-    """
-
     def __init__(self, vehicle, queue_manager, vision_align=None):
-        # ------------------------------
-        # Core objects
-        # ------------------------------
         self.vehicle = vehicle
         self.sm = StateMachine()
         self.queue = queue_manager
         self.vision = vision_align
-
-        # ------------------------------
-        # Controllers
-        # ------------------------------
         self.spray = SprayController()
         self.safety = SafetyChecks(vehicle)
-
-        # ------------------------------
-        # Packet + CSV ingestion
-        # ------------------------------
         self.packet_handler = PacketHandler()
         self.csv_receiver = CSVReceiver(
             csv_path=CSV_INPUT_PATH,
             packet_handler=self.packet_handler,
             queue_manager=self.queue
         )
-
-        # ------------------------------
-        # Mission state variables
-        # ------------------------------
         self.current_target = None
         self.takeoff_done = False
-
-        # ------------------------------
-        # Timers
-        # ------------------------------
         self.gps_bad_since = None
         self.no_target_since = None
 
     # ==================================================
-    # MAIN STEP (CALLED REPEATEDLY, NON-BLOCKING)
+    # MAIN STEP
     # ==================================================
     def step(self):
-        """
-        One safe iteration of the mission.
-        This function must NEVER block except during SPRAY.
-        """
-
-        # --------------------------------------------------
-        # 1. SAFETY FIRST (HIGHEST PRIORITY)
-        # --------------------------------------------------
+        # 1. Safety
         if not self._gps_with_grace():
             self._go_rtl("GPS lost beyond grace period")
             return
 
-        if not self.safety.attitude_ok():
-            self._go_rtl("Excessive roll/pitch detected")
-            return
-
-        # --------------------------------------------------
-        # 2. RECEIVE NEW TARGETS (CSV)
-        # --------------------------------------------------
-        # Safe to call every loop
+        # 2. Ingest Data
         self.csv_receiver.poll()
-
-        # If new targets arrived, cancel "no-target" timer
         if self.queue.has_pending():
             self.no_target_since = None
 
-        # --------------------------------------------------
-        # 3. STATE HANDLING
-        # --------------------------------------------------
+        # 3. State Machine
         state = self.sm.get_state()
 
-        # ==============================
-        # INIT
-        # ==============================
+        # --- INIT ---
         if state == DroneState.INIT:
             self.spray.setup()
-
             if USE_VISION_ALIGN and self.vision:
                 self.vision.start()
-
             self.sm.set_state(DroneState.IDLE)
 
-        # ==============================
-        # IDLE
-        # ==============================
+        # --- IDLE ---
         elif state == DroneState.IDLE:
             if self.queue.ready_for_mission():
                 self.sm.set_state(DroneState.ARM_TAKEOFF)
 
-        # ==============================
-        # ARM AND TAKEOFF
-        # ==============================
+        # --- ARM & TAKEOFF ---
         elif state == DroneState.ARM_TAKEOFF:
             if not self.takeoff_done:
-                arm_and_takeoff(
-                    self.vehicle,
-                    self.vehicle.location.global_relative_frame.alt + 5
-                )
+                # Use SMART TAKEOFF to Safe Travel Altitude
+                smart_takeoff(self.vehicle, SAFE_TRAVEL_ALT)
                 self.takeoff_done = True
+                print("⏳ Stabilizing after takeoff...")
+                time.sleep(2)
 
             self.sm.set_state(DroneState.NAVIGATE)
 
-        # ==============================
-        # NAVIGATE
-        # ==============================
+        # --- NAVIGATE (High -> Low Logic) ---
         elif state == DroneState.NAVIGATE:
             if self.current_target is None:
                 self.current_target = self.queue.pop_next_target()
 
+                # IF NO TARGETS: Wait here. Do not ascend/descend.
                 if self.current_target is None:
                     self._handle_no_targets()
                     return
 
-            goto_location(
+            # STEP 1: Fly to Target at SAFE_TRAVEL_ALT (3m)
+            arrived = navigate_to_target_blocking(
                 self.vehicle,
                 self.current_target["lat"],
                 self.current_target["lon"],
-                self.current_target["alt"]
+                SAFE_TRAVEL_ALT
             )
 
-            dist = distance_to_target(
-                self.vehicle.location.global_relative_frame,
-                self.current_target
-            )
+            if arrived:
+                # STEP 2: Descend to SPRAY_WORK_ALT (1.5m)
+                change_altitude(self.vehicle, SPRAY_WORK_ALT)
 
-            if dist <= NAVIGATION_REACHED_DIST_M:
+                # STEP 3: Proceed to Align or Spray
                 if USE_VISION_ALIGN and self.vision:
+                    # --- ADDED: RESET VISION TIMER FOR NEW TARGET ---
+                    self.vision.reset()
                     self.sm.set_state(DroneState.ALIGN)
                 else:
                     self.sm.set_state(DroneState.SPRAY)
+            else:
+                # If navigation failed/interrupted
+                self.current_target = None
 
-        # ==============================
-        # ALIGN (VISION – OPTIONAL)
-        # ==============================
+        # --- ALIGN (UPDATED: LOGIC WITH TIMEOUT) ---
         elif state == DroneState.ALIGN:
-            # Absolute safety guard
             if not (USE_VISION_ALIGN and self.vision):
                 self.sm.set_state(DroneState.SPRAY)
                 return
 
+            # 1. Get Error from Camera
             aligned, err_x, err_y = self.vision.process_frame()
             self.safety.update_vision_heartbeat()
 
-            if aligned:
+            # --- ADDED: CHECK TIME SINCE LAST SIGHT ---
+            # If we haven't seen the target for >15s, give up.
+            time_since_sight = time.time() - self.vision.last_seen_time
+            if time_since_sight > VISION_TIMEOUT_SEC:
+                print(f"⚠️ Target lost for {int(time_since_sight)}s. Giving up and Spraying.")
+                send_body_velocity(self.vehicle, 0, 0, 0)
                 self.sm.set_state(DroneState.SPRAY)
+                return
+            # ------------------------------------------
 
-        # ==============================
-        # SPRAY (BLOCKING – INTENTIONAL)
-        # ==============================
+            if aligned:
+                print("✅ Target Aligned! Stopping and Spraying.")
+                # Stop any movement before spraying
+                send_body_velocity(self.vehicle, 0, 0, 0)
+                self.sm.set_state(DroneState.SPRAY)
+            
+            elif err_x is not None and err_y is not None:
+                # 2. Calculate Correction (P-Controller)
+                K_p = 0.002 
+                MAX_SPEED = 0.3 
+
+                vel_x = -err_y * K_p
+                vel_y = err_x * K_p
+                
+                # Safety Clamp
+                vel_x = max(min(vel_x, MAX_SPEED), -MAX_SPEED)
+                vel_y = max(min(vel_y, MAX_SPEED), -MAX_SPEED)
+                
+                # Send the "Nudge" command
+                print(f"   🎯 Aligning... Err: {err_x},{err_y}")
+                send_body_velocity(self.vehicle, vel_x, vel_y, 0)
+            
+            else:
+                # Target lost temporarily? Hover in place.
+                if int(time.time()) % 2 == 0: # Print sparingly
+                    print("   ⚠️ Searching...")
+                send_body_velocity(self.vehicle, 0, 0, 0)
+
+        # --- SPRAY ---
         elif state == DroneState.SPRAY:
+            # Delays and Logic handled inside spray_for
             self.spray.spray_for(SPRAY_DURATION_SEC)
             self.sm.set_state(DroneState.POST_SPRAY)
 
-        # ==============================
-        # POST SPRAY
-        # ==============================
+        # --- POST SPRAY (Ascend Logic) ---
         elif state == DroneState.POST_SPRAY:
-            
-            log_spray(self.current_target, SPRAY_DURATION_SEC, status="sprayed")
-            
-            self.queue.mark_current_done("sprayed")
+            # STEP 4: Ascend back to SAFE_TRAVEL_ALT before moving
+            change_altitude(self.vehicle, SAFE_TRAVEL_ALT)
+
+            finished_target = self.queue.mark_current_done("sprayed")
+            if finished_target:
+                log_spray(finished_target, SPRAY_DURATION_SEC, status="sprayed")
+
             self.current_target = None
 
-            if self.queue.has_pending():
-                self.sm.set_state(DroneState.NAVIGATE)
-            else:
-                self._handle_no_targets()
+            # Always go to NAVIGATE to check queue
+            self.sm.set_state(DroneState.NAVIGATE)
 
-        # ==============================
-        # RTL
-        # ==============================
+        # --- RTL ---
         elif state == DroneState.RTL:
-            self.vehicle.mode = VehicleMode("RTL")
-            self.spray.spray_off()
+            if self.vehicle.mode.name != "RTL":
+                self.vehicle.mode = VehicleMode("RTL")
 
-    # ==================================================
-    # GPS GRACE HANDLING
-    # ==================================================
+            if self.spray.spraying:
+                self.spray.spray_off()
+
+    # Helpers
     def _gps_with_grace(self):
         if self.safety.gps_ok():
             self.gps_bad_since = None
             return True
-
         if self.gps_bad_since is None:
             self.gps_bad_since = time.time()
             return True
-
         if (time.time() - self.gps_bad_since) < GPS_GRACE_SEC:
             return True
-
         return False
 
-    # ==================================================
-    # NO TARGET HANDLING
-    # ==================================================
     def _handle_no_targets(self):
         if self.no_target_since is None:
             self.no_target_since = time.time()
             return
-
         if (time.time() - self.no_target_since) >= NO_TARGET_HOVER_SEC:
             self._go_rtl("No pending spray targets")
 
-    # ==================================================
-    # RTL HELPER
-    # ==================================================
     def _go_rtl(self, reason):
         print(f"⚠️ RTL triggered: {reason}")
         self.sm.set_state(DroneState.RTL)
-
