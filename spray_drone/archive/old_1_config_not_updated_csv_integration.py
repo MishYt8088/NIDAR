@@ -69,4 +69,3 @@ GPS_GRACE_SEC = 10.0
 
 # Hover time after last target before RTL (seconds)
 NO_TARGET_HOVER_SEC = 10.0
-
