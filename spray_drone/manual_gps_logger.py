@@ -1,4 +1,6 @@
 # manual_gps_logger.py
+import dronekit_py311_fix
+
 import time
 import csv
 import os
@@ -9,7 +11,7 @@ from dronekit import connect
 # CONFIGURATION
 # ================================
 
-CONNECTION_STRING = "/dev/ttyAMA0"   # change if needed
+CONNECTION_STRING = "/dev/ttyACM0"   # change if needed
 BAUD_RATE = 57600
 
 CSV_OUTPUT_PATH = "/home/pi/survey_outputs/yellow_targets.csv"
@@ -120,4 +122,3 @@ def main():
 # ================================
 if __name__ == "__main__":
     main()
-
