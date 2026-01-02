@@ -82,4 +82,3 @@ class StateMachine:
     # --------------------------------------------------
     def reset(self):
         self.state = DroneState.INIT
-
