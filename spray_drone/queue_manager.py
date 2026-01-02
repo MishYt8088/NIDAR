@@ -12,6 +12,10 @@ class QueueManager:
         self.queue = deque()
         self.seen_ids = set()
         self.current_target = None
+        
+    def size(self):
+        return len(self.queue)
+
 
     # --------------------------------------------------
     # ADD NEW PACKET
@@ -25,16 +29,23 @@ class QueueManager:
 
         # ---- ID duplicate check ----
         if pkt_id in self.seen_ids:
+            print(f"❌ Rejected: duplicate ID {pkt_id}")
             return False
 
         # ---- Distance duplicate check ----
         for existing in self.queue:
-            if self._distance_m(existing, packet) < MIN_DISTANCE_BETWEEN_TARGETS_M:
+            dist = self._distance_m(existing, packet)
+            print(f"📏 Distance to existing target: {dist:.2f} m")
+
+            if dist < MIN_DISTANCE_BETWEEN_TARGETS_M:
+                print("❌ Rejected: too close to existing target")
                 return False
 
         # Passed all checks
         self.queue.append(packet)
         self.seen_ids.add(pkt_id)
+        
+        print(f"✅ Accepted packet ID {pkt_id}")
         return True
 
     # --------------------------------------------------
@@ -61,10 +72,13 @@ class QueueManager:
     # --------------------------------------------------
     def mark_current_done(self, status="sprayed"):
         if self.current_target is None:
-            return
+            return None
 
-        self.current_target["status"] = status
+        finished = self.current_target
+        finished["status"] = status
         self.current_target = None
+        return finished
+
 
     # --------------------------------------------------
     # QUEUE STATUS HELPERS
@@ -72,8 +86,8 @@ class QueueManager:
     def has_pending(self):
         return bool(self.queue)
 
-    def queue_size(self):
-        return len(self.queue)
+#    def queue_size(self):
+#        return len(self.queue)
 
     # --------------------------------------------------
     # DISTANCE CALCULATION (meters)
@@ -89,4 +103,3 @@ class QueueManager:
             (dlat * 1.113195e5) ** 2 +
             (dlon * 1.113195e5) ** 2
         )
-
