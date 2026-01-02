@@ -38,4 +38,3 @@ def log_spray(target, spray_duration, status="sprayed"):
             int(time.time()),
             status
         ])
-
