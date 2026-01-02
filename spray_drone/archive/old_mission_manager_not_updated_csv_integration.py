@@ -154,4 +154,3 @@ class MissionManager:
     def _go_rtl(self, reason):
         print(f"⚠️ RTL triggered: {reason}")
         self.sm.set_state(DroneState.RTL)
-
