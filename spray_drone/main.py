@@ -1,4 +1,6 @@
 # main.py
+import dronekit_py311_fix
+
 import time
 import sys
 
@@ -22,7 +24,7 @@ def connect_vehicle():
     Adjust connection string as needed.
     """
     print("🔌 Connecting to vehicle...")
-    vehicle = connect('/dev/ttyAMA0', baud=57600, wait_ready=True)
+    vehicle = connect('/dev/ttyACM0',baud=57600, wait_ready=True)
     print("✅ Vehicle connected")
     return vehicle
 
@@ -57,6 +59,13 @@ def main():
         # ---------- MAIN LOOP ----------
         while True:
             mission_manager.step()
+
+            # --- EXIT CONDITION (NEW) ---
+            # If the drone is in RTL mode and has Landed (Disarmed), stop t>
+            if vehicle.mode.name == 'RTL' and not vehicle.armed:
+                print("✅ Drone has landed safely (RTL Complete). Exiting.")
+                break
+
             time.sleep(0.1)
 
     except KeyboardInterrupt:
@@ -83,4 +92,3 @@ def main():
 # --------------------------------------------------
 if __name__ == "__main__":
     main()
-
