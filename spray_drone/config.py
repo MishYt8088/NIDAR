@@ -14,10 +14,15 @@ SPRAY_DURATION_SEC = 2.0
 # ================================
 
 # Enable vision-based fine alignment
-USE_VISION_ALIGN = False   # Set True if camera is available
+USE_VISION_ALIGN = True   # Set True if camera is available
 
 # Vision timeout before declaring failure (seconds)
-VISION_TIMEOUT_SEC = 3.0
+VISION_TIMEOUT_SEC = 10.0
+
+
+
+# Show camera feed in VNC (DEBUG ONLY)
+VISION_DEBUG_VIEW = True
 
 
 # ================================
@@ -25,7 +30,7 @@ VISION_TIMEOUT_SEC = 3.0
 # ================================
 
 # Minimum safe battery voltage (example for 6S LiPo)
-MIN_BATTERY_VOLTAGE = 21.0
+MIN_BATTERY_VOLTAGE = 10.0
 
 # Maximum allowed tilt during spray (degrees)
 MAX_ROLL_DEG = 3.0
@@ -40,6 +45,9 @@ MAX_ALTITUDE_M = 10.0
 # ================================
 CSV_INPUT_PATH = "/home/pi/survey_outputs/yellow_targets.csv"
 
+# Read existing CSV rows at startup (for testing / manual GPS)
+CSV_READ_EXISTING = True
+
 
 # ================================
 # PACKET VALIDATION
@@ -49,7 +57,7 @@ CSV_INPUT_PATH = "/home/pi/survey_outputs/yellow_targets.csv"
 MIN_CONFIDENCE = 0.6
 
 # Maximum age of packet before rejection (seconds)
-MAX_PACKET_AGE_SEC = 120.0
+MAX_PACKET_AGE_SEC = 9999.0
 
 
 # ================================
@@ -57,7 +65,7 @@ MAX_PACKET_AGE_SEC = 120.0
 # ================================
 
 # Minimum number of targets before starting mission
-MIN_BATCH_POINTS = 2
+MIN_BATCH_POINTS = 1
 
 # Minimum distance between two spray targets (meters)
 MIN_DISTANCE_BETWEEN_TARGETS_M = 1.0
@@ -68,11 +76,10 @@ MIN_DISTANCE_BETWEEN_TARGETS_M = 1.0
 # ================================
 
 # Distance considered "reached" for GPS navigation (meters)
-NAVIGATION_REACHED_DIST_M = 1.0
+NAVIGATION_REACHED_DIST_M = 0.4
 
 # GPS grace period before RTL (seconds)
 GPS_GRACE_SEC = 10.0
 
 # Hover time after last target before RTL (seconds)
 NO_TARGET_HOVER_SEC = 10.0
-
