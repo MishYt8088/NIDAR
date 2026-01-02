@@ -1,109 +1,84 @@
-# vision_align.py
-import cv2
-import numpy as np
-import time
+# state_machine.py
+from enum import Enum, auto
 
 
-class VisionAlign:
-    def __init__(self,
-                 cam_index=0,
-                 tolerance_px=15,
-                 stable_frames_required=10):
-        self.cam_index = cam_index
-        self.tolerance_px = tolerance_px
-        self.stable_frames_required = stable_frames_required
+class DroneState(Enum):
+    INIT = auto()
+    IDLE = auto()
+    ARM_TAKEOFF = auto()
+    NAVIGATE = auto()
+    ALIGN = auto()
+    SPRAY = auto()
+    POST_SPRAY = auto()
+    RTL = auto()
 
-        self.cap = None
-        self.stable_count = 0
-        self.last_seen_time = time.time()
+
+class StateMachine:
+    def __init__(self):
+        self.state = DroneState.INIT
+
+        # Allowed transitions map
+        self.allowed_transitions = {
+            DroneState.INIT: [DroneState.IDLE],
+
+            DroneState.IDLE: [DroneState.ARM_TAKEOFF],
+
+            DroneState.ARM_TAKEOFF: [DroneState.NAVIGATE],
+
+            DroneState.NAVIGATE: [
+                DroneState.ALIGN,
+                DroneState.SPRAY,
+                DroneState.RTL
+            ],
+
+            DroneState.ALIGN: [
+                DroneState.SPRAY,
+                DroneState.NAVIGATE,
+                DroneState.RTL
+            ],
+
+            DroneState.SPRAY: [DroneState.POST_SPRAY],
+
+            DroneState.POST_SPRAY: [
+                DroneState.NAVIGATE,
+                DroneState.RTL
+            ],
+
+            DroneState.RTL: []
+        }
 
     # --------------------------------------------------
-    # START CAMERA
+    # GET CURRENT STATE
     # --------------------------------------------------
-    def start(self):
-        self.cap = cv2.VideoCapture(self.cam_index)
-        if not self.cap.isOpened():
-            raise RuntimeError("Camera could not be opened")
-
-        self.stable_count = 0
-        self.last_seen_time = time.time()
-        print("📷 Vision alignment started")
+    def get_state(self):
+        return self.state
 
     # --------------------------------------------------
-    # STOP CAMERA
+    # CHECK TRANSITION VALIDITY
     # --------------------------------------------------
-    def stop(self):
-        if self.cap:
-            self.cap.release()
-            self.cap = None
-            print("📷 Vision alignment stopped")
+    def can_transition(self, next_state):
+        return next_state in self.allowed_transitions[self.state]
 
     # --------------------------------------------------
-    # PROCESS ONE FRAME
+    # SET NEW STATE (SAFE)
     # --------------------------------------------------
-    def process_frame(self):
-        """
-        Returns:
-            aligned (bool)
-            error_x (int or None)
-            error_y (int or None)
-        """
-
-        ret, frame = self.cap.read()
-        if not ret:
-            return False, None, None
-
-        h, w, _ = frame.shape
-        cx_img = w // 2
-        cy_img = h // 2
-
-        # Convert to HSV
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-        # Yellow mask (tune if needed)
-        lower_yellow = np.array([20, 100, 100])
-        upper_yellow = np.array([35, 255, 255])
-        mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-
-        # Noise removal
-        mask = cv2.medianBlur(mask, 5)
-
-        # Find contours
-        contours, _ = cv2.findContours(
-            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        if not contours:
-            self.stable_count = 0
-            return False, None, None
-
-        # Pick largest yellow region
-        largest = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(largest)
-
-        if area < 300:  # very small noise
-            self.stable_count = 0
-            return False, None, None
-
-        # Centroid calculation
-        M = cv2.moments(largest)
-        if M["m00"] == 0:
-            return False, None, None
-
-        cx_obj = int(M["m10"] / M["m00"])
-        cy_obj = int(M["m01"] / M["m00"])
-
-        error_x = cx_obj - cx_img
-        error_y = cy_obj - cy_img
-
-        # Check alignment tolerance
-        if abs(error_x) < self.tolerance_px and abs(error_y) < self.tolerance_px:
-            self.stable_count += 1
+    def set_state(self, next_state):
+        # 🔒 EMERGENCY OVERRIDE
+        # RTL must be allowed from ANY state
+        if next_state == DroneState.RTL:
+            self.state = next_state
+            return True
+        
+        if self.can_transition(next_state):
+            self.state = next_state
+            return True
         else:
-            self.stable_count = 0
+            raise ValueError(
+                f"Invalid transition: {self.state.name} → {next_state.name}"
+            )
 
-        aligned = self.stable_count >= self.stable_frames_required
-
-        return aligned, error_x, error_y
-
-
+    # --------------------------------------------------
+    # RESET MACHINE
+    # --------------------------------------------------
+    def reset(self):
+        self.state = DroneState.INIT
